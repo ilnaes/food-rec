@@ -4,3 +4,4 @@ outputs/
 .Rhistory
 rsconnect
 data/
+*.html

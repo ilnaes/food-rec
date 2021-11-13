@@ -2,7 +2,8 @@
 library(tidyverse)
 library(tidytext)
 library(lubridate)
-library(reticulate)
+
+source("prep.R")
 ```
 
 ```{r}
@@ -10,20 +11,6 @@ df <- read_csv("outputs/facts.csv") %>%
   mutate(year = year(date))
 
 ingredients <- read_csv("outputs/ingredients.csv")
-
-plurals <- ingredients %>%
-  distinct(base) %>%
-  filter(str_detect(base, "s$")) %>%
-  mutate(s = str_match(base, "^(.*)s$")[, 2]) %>%
-  filter(s %in% ingredients$base)
-
-plu_list <- plurals$base
-names(plu_list) <- plurals$s
-
-ingredients <- ingredients %>%
-  mutate(base = if_else(base %in% names(plu_list), plu_list[.$base], base))
-
-View(df)
 ```
 
 # Quality and quantity per year
@@ -40,9 +27,9 @@ df %>%
   ggplot(aes(year, n)) +
   geom_line()
 
-df %>% 
-  count(year) %>% 
-  mutate(n = cumsum(n)) %>% 
+df %>%
+  count(year) %>%
+  mutate(n = cumsum(n)) %>%
   ggplot(aes(year, n)) +
   geom_line()
 ```
@@ -62,12 +49,17 @@ df %>%
 
 Well the average rating has been going up, so it seems like Epicurious has been focusing on quality over quantity.
 
+There was a serious spike in 2021, which is interesting.  The data was scraped in November, so there was enough data that it probably wasn't just chance.
+
 # Authors
 
 What are the most prolific authors?
 
 ```{r}
-df %>%
+unnest_authors <- df %>%
+  unnest_tokens(author, author, token = str_split, pattern = ";")
+
+unnest_authors %>%
   filter(!is.na(author)) %>%
   count(author) %>%
   arrange(-n)
@@ -87,6 +79,14 @@ df %>%
 ```
 
 This all makes sense.  BA published as a team until around 2016, which is also when some of the BA people started showing up.  They were probably pushing the personalities more.  Also note that a lot of the BA people stopped showing up around last year, which was when the [blow up](https://www.eater.com/2020/8/6/21357341/priya-krishna-rick-martinez-sohla-el-waylly-resign-bon-appetit-test-kitchen-videos) happened.
+
+```{r}
+unnest_authors %>%
+  count(id) %>%
+  count(n) %>%
+  arrange(n)
+```
+
 
 # Tags
 
@@ -117,38 +117,100 @@ df %>%
 # Ingredients
 
 ```{r}
-df %>%
+ingr <- df %>%
   left_join(ingredients, by = "id") %>%
+  prep(to_mat = FALSE)
+
+ingr
+```
+
+```{r}
+ingr %>%
   count(base) %>%
   arrange(-n) %>%
   head(500) %>%
   View()
 ```
 
+We want to get a tf-idf of the ingredients.
+
 ```{r}
-counts <- df %>% 
-  left_join(ingredients, on = "id") %>% 
-  prep(to_mat = FALSE) %>% 
+tf_idf <- function(df, field) {
+  n_docs <- df %>%
+    distinct({{ field }}) %>%
+    nrow()
+
+  tf <- df %>%
+    group_by(base, {{ field }}) %>%
+    summarize(n = n()) %>%
+    ungroup(base) %>%
+    mutate(tf = n / sum(n)) %>%
+    ungroup()
+
+  idf <- df %>%
+    distinct(base, {{ field }}) %>%
+    group_by(base) %>%
+    count() %>%
+    mutate(idf = log(n_docs) - log(n)) %>%
+    select(-n) %>%
+    ungroup()
+
+  tf %>%
+    left_join(idf, on = "base") %>%
+    mutate(tf_idf = tf * idf)
+}
+```
+
+
+
+```{r}
+top_authors <- df %>%
+  unnest_tokens(author, author, token = str_split, pattern = ";") %>%
+  count(author) %>%
+  filter(!is.na(author), author != "the bon appétit test kitchen") %>%
+  arrange(-n) %>%
+  head(20)
+
+top_authors %>%
+  left_join(df %>% unnest_tokens(author, author, token = str_split, patter = ";"),
+    on = "author"
+  ) %>% 
+  select(-n) %>%
+  left_join(ingredients %>% select(-author), by = "id") %>% 
+  tf_idf(author) %>% 
+  group_by(author) %>% 
+  slice_max(tf_idf, n = 10) %>% 
+  View()
+```
+
+
+
+
+
+```{r}
+counts <- df %>%
+  left_join(ingredients, on = "id") %>%
+  prep(to_mat = FALSE) %>%
   add_count(id)
 
-counts %>% 
-  distinct(id, n) %>% 
-  count(n) %>% 
-  arrange(n) %>% 
-  mutate(p = cumsum(nn)/sum(nn))
+counts %>%
+  distinct(id, n) %>%
+  count(n) %>%
+  arrange(n) %>%
+  mutate(p = cumsum(nn) / sum(nn))
 
-counts %>% 
-  filter(n > 100) %>% 
+counts %>%
+  filter(n > 100) %>%
   View()
 
-counts %>% 
-  distinct(id, n) %>% 
+counts %>%
+  distinct(id, n) %>%
   ggplot(aes(n)) +
   geom_histogram()
 
 counts %>%
-  distinct(id, n) %>% 
-  filter(n > 30) %>% 
+  distinct(id, n) %>%
+  filter(n > 30) %>%
   View()
 ```
 
@@ -177,11 +239,11 @@ saveRDS(res, "kms.RDS")
 ```{r}
 res <- readRDS("kms.RDS")
 
-tibble(x = 5:20, y = map_dbl(res, ~.$tot.withinss)) %>% 
+tibble(x = 5:20, y = map_dbl(res, ~ .$tot.withinss)) %>%
   ggplot(aes(x = x, y = y)) +
   geom_line()
 
-tibble(x = res[[15]]$cluster) %>% 
+tibble(x = res[[15]]$cluster) %>%
   count(x)
 
 df %>%
@@ -190,11 +252,11 @@ df %>%
   filter(n >= 5) %>%
   distinct(id, name, base) %>%
   mutate(n = 1) %>%
-  pivot_wider(c("id", "name"), names_from = base, values_from = n, values_fill = 0) %>% 
-  select(name) %>% 
-  mutate(cluster = res[[15]]$cluster) %>% 
-  group_by(cluster) %>% 
-  slice_head(n = 10) %>% 
+  pivot_wider(c("id", "name"), names_from = base, values_from = n, values_fill = 0) %>%
+  select(name) %>%
+  mutate(cluster = res[[15]]$cluster) %>%
+  group_by(cluster) %>%
+  slice_head(n = 10) %>%
   View()
 ```
 
@@ -412,4 +474,3 @@ tibble(
   filter(cluster == 7) %>%
   sample_n(10)
 ```
-
