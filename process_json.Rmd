@@ -1,0 +1,93 @@
+```{r}
+library(tidyverse)
+library(jsonlite)
+library(lubridate)
+```
+
+```{r}
+f <- file("data/epi.json", "r")
+lines <- readLines(f)
+close(f)
+```
+
+```{r}
+process_field <- function(line, field) {
+  f <- ensym(field)
+  obj <- fromJSON(line)
+
+  if (length(obj[[rlang::as_string(f)]]) == 0) {
+    tibble()
+  } else {
+    obj %>%
+      with(tibble(id = url, !!f := !!f))
+  }
+}
+
+ingr <- lines %>%
+  map(process_field, recipeIngredient) %>%
+  bind_rows() %>%
+  distinct() %>% 
+  rename(ingredients = recipeIngredient) %>%
+  filter(
+    !str_detect(ingredients, "^\\s*$"),
+    !str_detect(ingredients, "^\\*")
+  ) %>%
+  mutate(
+    ingredients = ingredients %>%
+      str_to_lower() %>%
+      str_replace_all("\n", " ") %>%
+      stringi::stri_trans_general("latin-ascii") %>%
+      str_remove(".*: "),
+    id = str_match(id, "/([^/]+)$")[, 2]
+  )
+
+f <- file("outputs/ingr", "w")
+writeLines(ingr$ingredients, f)
+close(f)
+```
+
+```{r}
+# parsed.json comes from running https://github.com/mtlynch/ingredient-phrase-tagger
+# on the ingr output
+ingr2 <- fromJSON("outputs/parsed.json")
+
+ingr %>%
+  mutate(base = ingr2$name) %>% 
+  write_csv("outputs/ingredients.csv")
+```
+
+```{r}
+get_facts <- function(l) {
+  obj <- fromJSON(l)
+  tibble(
+    id = obj$url,
+    name = obj$name,
+    date = obj$datePublished,
+    rating = obj$aggregateRating$ratingValue,
+    count = obj$aggregateRating$ratingCount,
+    author = paste(obj$author$name, collapse=';'),
+    tags = paste(obj$keywords, collapse=';')
+  )
+}
+
+facts <- lines %>%
+  map(get_facts) %>%
+  bind_rows() %>%
+  distinct() %>% 
+  mutate(
+    id = str_match(id, "/([^/]+)$")[, 2],
+    date = ymd(str_sub(date, start = 1, end = 10))
+  ) 
+
+facts %>% 
+  write_csv("outputs/facts.csv")
+```
+
+```{r}
+lines[[1]] %>% 
+  fromJSON() %>% 
+  str()
+```
+
+
+

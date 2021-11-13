@@ -1,0 +1,6 @@
+outputs/
+*.RDS
+.Rproj.user/
+.Rhistory
+rsconnect
+data/
