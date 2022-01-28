@@ -52,7 +52,7 @@ test_row <- function(model, row, pow, n = 2) {
 }
 ```
 
-This function will create a model for a particular rsmaple fold and test every recipe in the training part of the fold.
+This function will create a model for a particular rsample fold and test every recipe in the training part of the fold.
 
 ```{r}
 test_fold <- function(fold, min_num = 2, pows = 0.5) {
@@ -111,10 +111,10 @@ res <- map2(
 ) %>%
   bind_rows()
 
-res %>% 
-  mutate(min_num = as_factor(min_num)) %>% 
+res %>%
+  mutate(min_num = as_factor(min_num)) %>%
   group_by(min_num, pows) %>%
-  summarize(metric = mean(metric)) %>% 
+  summarize(metric = mean(metric)) %>%
   ggplot(aes(pows, metric, color = min_num)) +
   geom_line() +
   geom_point()
@@ -126,22 +126,22 @@ Looks like power of 0.25 and min_num of 2 works best.
 
 ```{r}
 model <- train %>%
-  left_join(ingredients, on = "id") %>% 
+  left_join(ingredients, on = "id") %>%
   prep(min_num = 2) %>%
   create_sim()
 
-test %>% 
-  left_join(ingredients, on = "id") %>% 
-  prep() %>% 
-  apply(1, \(x) test_row(model, x, 0.25)) %>% 
+test %>%
+  left_join(ingredients, on = "id") %>%
+  prep() %>%
+  apply(1, \(x) test_row(model, x, 0.25)) %>%
   mean()
 ```
 
 ### Train model on all data to use for deployment
 
 ```{r}
-ingredients %>% 
-  prep(min_num = 2) %>% 
-  create_sim() %>% 
+ingredients %>%
+  prep(min_num = 2) %>%
+  create_sim() %>%
   saveRDS("ingredients-rec/sim.RDS")
 ```

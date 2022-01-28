@@ -1,4 +1,8 @@
-```{r}
+```{r, include = FALSE}
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+```{r, message=FALSE}
 library(tidyverse)
 library(tidytext)
 library(lubridate)
@@ -6,14 +10,14 @@ library(lubridate)
 source("prep.R")
 ```
 
-```{r}
+```{r, message=FALSE}
 df <- read_csv("outputs/facts.csv") %>%
   mutate(year = year(date))
 
 ingredients <- read_csv("outputs/ingredients.csv")
 ```
 
-# Quality and quantity per year
+### Yearly numbers
 
 Let's see how the number of recipes have been by year.
 
@@ -49,11 +53,11 @@ df %>%
 
 Well the average rating has been going up, so it seems like Epicurious has been focusing on quality over quantity.
 
-There was a serious spike in 2021, which is interesting.  The data was scraped in November, so there was enough data that it probably wasn't just chance.
+There was a serious spike in 2021, which is interesting.  The data was scraped in November, so there was enough data that it probably wasn't just chance.  Perhaps this was pandemic related?
 
-# Authors
+### Authors
 
-What are the most prolific authors?
+Who are the most prolific authors?
 
 ```{r}
 unnest_authors <- df %>%
@@ -80,41 +84,19 @@ df %>%
 
 This all makes sense.  BA published as a team until around 2016, which is also when some of the BA people started showing up.  They were probably pushing the personalities more.  Also note that a lot of the BA people stopped showing up around last year, which was when the [blow up](https://www.eater.com/2020/8/6/21357341/priya-krishna-rick-martinez-sohla-el-waylly-resign-bon-appetit-test-kitchen-videos) happened.
 
+We also look at the most prolific authors by year.
+
 ```{r}
 unnest_authors %>%
-  count(id) %>%
-  count(n) %>%
-  arrange(n)
+  filter(year > 2004, !is.na(author)) %>%
+  count(year, author) %>%
+  group_by(year) %>%
+  slice_max(n, n = 5)
 ```
 
+### Ingredients
 
-# Tags
-
-Let's see what tags have been popular and what have been rated well
-
-```{r}
-df %>%
-  unnest_tokens(tag, tags, token = str_split, pattern = ";") %>%
-  group_by(tag) %>%
-  summarize(
-    n = n(),
-    rating = mean(rating, na.rm = TRUE)
-  ) %>%
-  arrange(-n)
-```
-
-```{r}
-df %>%
-  unnest_tokens(tag, tags, token = str_split, pattern = ";") %>%
-  add_count(tag) %>%
-  filter(n > 9333, tag != "web", year > 2014) %>%
-  count(tag, year) %>%
-  ggplot(aes(year, n)) +
-  geom_line() +
-  facet_wrap(~tag, scales = "free_y")
-```
-
-# Ingredients
+We now analyze the ingredients of recipes.  We first expand the table by each ingredient in the recipe.
 
 ```{r}
 ingr <- df %>%
@@ -124,353 +106,160 @@ ingr <- df %>%
 ingr
 ```
 
+Base is the cleaned ingredient name.  Let's count how times each ingredients have shown up.  What are the most popular ingredients?
+
 ```{r}
 ingr %>%
   count(base) %>%
   arrange(-n) %>%
-  head(500) %>%
-  View()
+  head(100)
 ```
 
-We want to get a tf-idf of the ingredients.
+What is the distribution of the number of ingredients per recipe like?
 
 ```{r}
-tf_idf <- function(df, field) {
-  n_docs <- df %>%
-    distinct({{ field }}) %>%
-    nrow()
+ingr %>%
+  count(id) %>%
+  ggplot(aes(n)) +
+  geom_histogram()
+```
 
-  tf <- df %>%
-    group_by(base, {{ field }}) %>%
-    summarize(n = n()) %>%
-    ungroup(base) %>%
-    mutate(tf = n / sum(n)) %>%
-    ungroup()
+We will look at how ingredients change under two divisions: time and rating.  Let's first look at time.  We will split time into two parts: early <= 2004 (due to the timestamp in the data) and late >= 2014 (when Epicurious and BA were combined in a digital platform).  We want to calculate log odds, so we will ignore the inbetween.
 
-  idf <- df %>%
-    distinct(base, {{ field }}) %>%
-    group_by(base) %>%
-    count() %>%
-    mutate(idf = log(n_docs) - log(n)) %>%
-    select(-n) %>%
-    ungroup()
-
-  tf %>%
-    left_join(idf, on = "base") %>%
-    mutate(tf_idf = tf * idf)
+```{r}
+log_odds <- function(df, field, a, b) {
+  df %>%
+    count(base, {{ field }}) %>%
+    group_by({{ field }}) %>%
+    mutate(prob = (n + 1) / (sum(n) + 1)) %>%
+    pivot_wider(base, names_from = {{ field }}, values_from = prob, values_fill = 0) %>%
+    filter({{ a }} > 0, {{ b }} > 0) %>%
+    mutate(log_odds = log({{ a }}, base = 2) - log({{ b }}, base = 2))
 }
 ```
 
-
-
 ```{r}
-top_authors <- df %>%
-  unnest_tokens(author, author, token = str_split, pattern = ";") %>%
-  count(author) %>%
-  filter(!is.na(author), author != "the bon appétit test kitchen") %>%
-  arrange(-n) %>%
-  head(20)
-
-top_authors %>%
-  left_join(df %>% unnest_tokens(author, author, token = str_split, patter = ";"),
-    on = "author"
-  ) %>% 
-  select(-n) %>%
-  left_join(ingredients %>% select(-author), by = "id") %>% 
-  tf_idf(author) %>% 
-  group_by(author) %>% 
-  slice_max(tf_idf, n = 10) %>% 
-  View()
+ingr %>%
+  mutate(period = case_when(
+    year <= 2004 ~ "Early",
+    year >= 2014 ~ "Late",
+    TRUE ~ "Middle"
+  )) %>%
+  filter(period != "Middle") %>%
+  log_odds(period, Late, Early) %>%
+  {
+    \(x) bind_rows(slice_max(., log_odds, n = 10), slice_min(., log_odds, n = 10))
+  }() %>%
+  mutate(base = fct_reorder(base, log_odds)) %>%
+  ggplot(aes(log_odds, base)) +
+  geom_col(aes(fill = log_odds > 0)) +
+  theme(legend.position = "none") +
+  labs(x = "Log odds of appearing in later recipes", y = "Ingredient")
 ```
 
-
-
-
+We also look at the difference between the top and bottom quartiles.  Recipes of the bottom quartile tend to feature basic ingredients like pastas and legumes whereas the top rated recipes have more exotic ingredients like ramps, cotija, and grappa.
 
 ```{r}
-counts <- df %>%
-  left_join(ingredients, on = "id") %>%
-  prep(to_mat = FALSE) %>%
-  add_count(id)
+quantile(df$rating, probs = c(0.25, 0.75), na.rm = TRUE)
 
-counts %>%
-  distinct(id, n) %>%
-  count(n) %>%
-  arrange(n) %>%
-  mutate(p = cumsum(nn) / sum(nn))
-
-counts %>%
-  filter(n > 100) %>%
-  View()
-
-counts %>%
-  distinct(id, n) %>%
-  ggplot(aes(n)) +
-  geom_histogram()
-
-counts %>%
-  distinct(id, n) %>%
-  filter(n > 30) %>%
-  View()
+ingr %>%
+  mutate(group = case_when(
+    rating <= 3 ~ "Lo",
+    rating >= 3.66 ~ "Hi",
+    TRUE ~ "Middle"
+  )) %>%
+  filter(group != "Middle") %>%
+  log_odds(group, Hi, Lo) %>%
+  {
+    \(x) bind_rows(slice_max(., log_odds, n = 10), slice_min(., log_odds, n = 10))
+  }() %>%
+  mutate(base = fct_reorder(base, log_odds)) %>%
+  ggplot(aes(log_odds, base)) +
+  geom_col(aes(fill = log_odds > 0)) +
+  theme(legend.position = "none") +
+  labs(x = "Log odds of appearing in highly rated recipes", y = "Ingredient")
 ```
 
+### Similarities
+
+We now look at the similarity matrix that we will use in the recommender.
+
+```{r}
+source("ingredients-rec/ingr.rec.R")
+
+sim <- ingr %>%
+  prep(min_num = 10) %>%
+  create_sim()
+```
+
+We will pivot the similarity table into long form.
+
+```{r}
+sims <- sim$sim %>%
+  as_tibble() %>%
+  mutate(ingr1 = colnames(.)) %>%
+  pivot_longer(!ingr1, names_to = "ingr2", values_to = "val") %>%
+  filter(ingr1 < ingr2)
+
+sims
+```
+
+Let's look at a histogram of the similarities.
+
+```{r}
+sims %>%
+  ggplot(aes(val)) +
+  stat_ecdf()
+```
+
+Over 80% of pairs have no similarity value and most values are under 0.2.
+
+We now look at a graph where we connect ingredients with particularly high similarty.
+
+```{r, message=FALSE}
+library(igraph)
+library(ggraph)
+
+set.seed(2022) # reproducibility
+
+sims %>%
+  filter(val > 0.22) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link() +
+  geom_node_point() +
+  geom_node_text(aes(label = name), size = 3, vjust = 1, hjust = 1)
+```
+
+We see some natural connected components like baking, asian stir fry, cocktail, and gluten free baking.
+
+### Clustering
+
+Finally, we will do clustering of the item vectors.  We first create the item vector matrix where the vectors are all unit.  This is code from the create_sim function.
 
 ```{r}
 mat <- df %>%
   left_join(ingredients, by = "id") %>%
-  add_count(base) %>%
-  filter(n >= 5) %>%
-  distinct(id, base) %>%
-  mutate(n = 1) %>%
-  pivot_wider(id, names_from = base, values_from = n, values_fill = 0) %>%
-  select(-id) %>%
-  as.matrix()
+  prep(min_num = 5)
 
+mat <- t(mat / sqrt(rowSums(mat)))
 mat <- mat / sqrt(rowSums(mat * mat))
 ```
 
-```{r}
-res <- 2:15 %>%
-  map(\(x) kmeans(mat, centers = x, nstart = 10))
-
-saveRDS(res, "kms.RDS")
-```
+We now run kmeans to cluster the vectors.  Note that Euclidean distance between unit vectors corresponds well with the cosine of the angle by law of cosines.
 
 ```{r}
-res <- readRDS("kms.RDS")
+set.seed(2021) # reproducibility
 
-tibble(x = 5:20, y = map_dbl(res, ~ .$tot.withinss)) %>%
-  ggplot(aes(x = x, y = y)) +
-  geom_line()
+res <- kmeans(mat, centers = 10, nstart = 10)
 
-tibble(x = res[[15]]$cluster) %>%
-  count(x)
-
-df %>%
-  left_join(ingredients, by = "id") %>%
-  add_count(base) %>%
-  filter(n >= 5) %>%
-  distinct(id, name, base) %>%
-  mutate(n = 1) %>%
-  pivot_wider(c("id", "name"), names_from = base, values_from = n, values_fill = 0) %>%
-  select(name) %>%
-  mutate(cluster = res[[15]]$cluster) %>%
-  group_by(cluster) %>%
-  slice_head(n = 10) %>%
-  View()
-```
-
-
-
-
-
-
-```{r}
-library(stopwords)
-
-good_bad <- df %>%
-  unnest_tokens(word, hed) %>%
-  anti_join(stop_words, by = "word") %>%
-  group_by(word) %>%
-  mutate(n = n()) %>%
-  ungroup() %>%
-  mutate(rating = case_when(
-    aggregate_rating < 2.95 ~ "bad",
-    aggregate_rating > 3.67 ~ "good",
-    TRUE ~ "neutral",
-  )) %>%
-  filter(rating != "neutral")
-
-log_odds <- good_bad %>%
-  group_by(rating, word) %>%
-  summarize(n = n()) %>%
-  ungroup() %>%
-  pivot_wider(names_from = rating, values_from = n) %>%
-  replace_na(list("good" = 0, "bad" = 0)) %>%
-  mutate(
-    good_ratio = (good + 1) / (sum(good) + 1),
-    bad_ratio = (bad + 1) / (sum(bad) + 1),
-    log_ratio = log2(good_ratio / bad_ratio)
-  )
-
-log_odds %>%
-  filter(good + bad >= 10) %>%
-  arrange(-abs(log_ratio)) %>%
-  head(30) %>%
-  mutate(word = fct_reorder(word, log_ratio)) %>%
-  ggplot(aes(log_ratio, word)) +
-  geom_col(aes(fill = log_ratio > 0))
-```
-
-People tend to rate exciting meals like meats and alcohol dishes well but basic dishes like pastas and starches low.
-
-```{r}
-good_bad <- df %>%
-  unnest_tokens(word, hed) %>%
-  anti_join(stop_words, by = "word") %>%
-  group_by(word) %>%
-  mutate(n = n()) %>%
-  ungroup() %>%
-  mutate(period = case_when(
-    year <= 2004 ~ "early",
-    year >= 2014 ~ "late",
-    TRUE ~ "neutral",
-  )) %>%
-  filter(period != "neutral")
-
-log_odds <- good_bad %>%
-  group_by(period, word) %>%
-  summarize(n = n()) %>%
-  ungroup() %>%
-  pivot_wider(names_from = period, values_from = n) %>%
-  replace_na(list("early" = 0, "late" = 0)) %>%
-  mutate(
-    early_ratio = (early + 1) / (sum(early) + 1),
-    late_ratio = (late + 1) / (sum(late) + 1),
-    log_ratio = log2(late_ratio / early_ratio)
-  )
-
-log_odds %>%
-  filter(early + late >= 10) %>%
-  arrange(-abs(log_ratio)) %>%
-  head(30) %>%
-  mutate(word = fct_reorder(word, log_ratio)) %>%
-  ggplot(aes(log_ratio, word)) +
-  geom_col(aes(fill = log_ratio > 0))
-
-log_odds %>%
-  filter(early + late >= 10) %>%
-  arrange(log_ratio)
-```
-
-```{r}
-df %>%
-  count(str_detect(dek, "^[Ee]ditor"))
-
-df %>%
-  filter(!str_detect(dek, "^[Ee]ditor")) %>%
-  select(hed, dek) %>%
-  View()
-```
-
-```{r}
-write_lines(stringi::stri_trans_general(ingredients$ingredients, "latin-ascii"), "ingr.txt")
-```
-
-```{r}
-library(stringi)
-
-words <- df %>%
-  mutate(
-    new = hed %>%
-      stri_trans_general(id = "Latin-ASCII") %>%
-      str_remove_all("\\(.*?\\)"),
-    new2 = new
-  ) %>%
-  unnest_tokens(word, new)
-
-words %>%
-  group_by(id) %>%
-  count() %>%
-  ggplot(aes(n)) +
-  geom_histogram()
-
-words %>%
-  group_by(id) %>%
-  count() %>%
-  arrange(-n)
-
-words %>%
-  distinct(word) %>%
-  write_csv("data/vocab.csv")
-```
-
-```{r}
-deks_counts <- df %>%
-  unnest_tokens(dek, dek) %>%
-  filter(!is.na(dek)) %>%
-  group_by(id) %>%
-  summarize(dek = n())
-
-hed_counts <- df %>%
-  unnest_tokens(hed, hed) %>%
-  filter(!is.na(hed)) %>%
-  group_by(id) %>%
-  summarize(hed = n())
-
-counts <- hed_counts %>%
-  left_join(deks_counts, by = "id") %>%
-  mutate(dek = replace_na(dek, 0))
-
-counts %>%
-  ggplot(aes(hed, dek)) +
-  geom_point() +
-  geom_smooth(method = "lm")
-
-lm(dek ~ hed, counts) %>%
-  summary()
-
-conda_install(envname = "ret", packages = "nltk")
-conda_list()
-```
-
-
-```{r}
-library(stopwords)
-
-df2 <- read_csv("data/RAW_recipes.csv") %>%
-  filter(!is.na(description)) %>%
-  mutate(
-    description = str_replace_all(description, "\r\n", " "),
-    description = str_replace_all(description, "\\.(\\W+)", " punct \\1"),
-    description = str_replace_all(description, "[\\?!]", " punct "),
-    description = str_replace_all(description, ",", " commapunct "),
-    description = str_replace_all(description, " \\s+", " ")
-  )
-```
-
-```{r}
-write_lines(x = df2 %>% pull(description), file = "test.txt")
-```
-
-
-```{r}
-library(word2vec)
-model <- read.word2vec("glove_w2v.bin")
-```
-
-```{r}
-mat <- matrix(ncol = 50, nrow = nrow(df2))
-rownames(mat) <- df2$name
-
-for (i in 1:nrow(df2)) {
-  if (is.na(df2$description[[i]])) {
-    next
-  }
-  tokens <- hunspell::hunspell_parse(df2$description[[i]])[[1]] %>%
-    Filter(f = \(x) !(x %in% stop_words$word))
-
-  if (length(tokens) > 0) {
-    vec <- predict(model, newdata = tokens, type = "embedding") %>%
-      rbind() %>%
-      colMeans(na.rm = TRUE)
-    mat[i, ] <- vec
-  }
-}
-```
-
-```{r}
-res <- kmeans(t(apply(mat[complete.cases(mat), ], 1, \(x) x / sqrt(sum(x^2)))), centers = 9)
-```
-
-
-```{r}
 tibble(
-  cluster = res$cluster,
-  name = rownames(mat[complete.cases(mat), ]),
-  # description = df2$description[complete.cases(mat)],
+  ingredient = rownames(mat),
+  cluster = res$cluster
 ) %>%
-  arrange(cluster) %>%
-  filter(cluster == 7) %>%
-  sample_n(10)
+  group_by(cluster) %>%
+  slice_head(n = 5) %>%
+  print(n = 50)
 ```
+
+Some reasonable clusters.  Cluster 5 is obviously cocktails, 7 is probably sweet baked goods, 9 is more generic baked goods, and 10 is Asian cuisine.  The other clusters also have themes, but less obvious to interpretation.  It seems there is definitely information in the distance between item vectors.

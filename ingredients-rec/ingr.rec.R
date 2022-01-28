@@ -1,22 +1,14 @@
+# creates a ingredient recommendation object
+# which is a similarity matrix and a counts vector
 create_sim <- function(mat) {
-  # pt <- df %>%
-  #   distinct(id, base) %>%
-  #   add_count(base) %>%
-  #   filter(n >= 2) %>%
-  #   select(-n) %>%
-  #   group_by(id, base) %>%
-  #   summarize(n = 1) %>%
-  #   ungroup() %>%
-  #   pivot_wider(names_from = "base", values_from = n, values_fill = 0) %>%
-  #   select(-id)
-  # 
-  # mat <- as.matrix(pt)
   counts <- colSums(mat)
   ingr <- colnames(mat)
-  
-  mat <- t(mat / sqrt(rowSums(mat * mat)))
-  sim <- mat / sqrt(rowSums(mat * mat))
-  sim <- sim %*% t(sim)
+
+  # recipes are scaled so that recipes with many ingredients contribute less to similarities
+  mat <- t(mat / sqrt(rowSums(mat)))
+
+  sim <- mat / sqrt(rowSums(mat * mat)) # normalize item vectors
+  sim <- sim %*% t(sim) # gram matrix
   colnames(sim) <- ingr
 
   res <- list("sim" = sim, "counts" = counts)
@@ -25,6 +17,11 @@ create_sim <- function(mat) {
   res
 }
 
+# predict method for ingr.rec object
+# chr indicates whether newdata is a vector of ingredients
+# or a binary vector
+# pow indicates concordance of the ingredients (1 for none and close to 0 for high)
+# adventurous indicates how much to boost less frequently used items
 predict.ingr.rec <- function(self, newdata, pow, chr = TRUE, adventurous = 0, n = 10) {
   curr_row <- newdata
 
@@ -36,7 +33,7 @@ predict.ingr.rec <- function(self, newdata, pow, chr = TRUE, adventurous = 0, n 
       map_lgl(~ . %in% curr)
   } else {
     curr <- colnames(self$sim)[curr_row]
-    
+
     curr_row <- as.logical(curr_row)
   }
 
@@ -46,7 +43,7 @@ predict.ingr.rec <- function(self, newdata, pow, chr = TRUE, adventurous = 0, n 
     # only colsum if more than 1 ingredient
     sims <- colSums(sims)
   }
-  
+
   if (length(curr) == 0) {
     tibble(base = 0.0, spice = 0.0, total = 0.0, name = c("NONE"))
   } else {
