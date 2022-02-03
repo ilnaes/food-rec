@@ -26,7 +26,7 @@ process_field <- function(line, field) {
 ingr <- lines %>%
   map(process_field, recipeIngredient) %>%
   bind_rows() %>%
-  distinct() %>% 
+  distinct() %>%
   rename(ingredients = recipeIngredient) %>%
   filter(
     !str_detect(ingredients, "^\\s*$"),
@@ -52,7 +52,7 @@ close(f)
 ingr2 <- fromJSON("outputs/parsed.json")
 
 ingr %>%
-  mutate(base = ingr2$name) %>% 
+  mutate(base = ingr2$name) %>%
   write_csv("outputs/ingredients.csv")
 ```
 
@@ -65,27 +65,27 @@ get_facts <- function(l) {
     date = obj$datePublished,
     rating = obj$aggregateRating$ratingValue,
     count = obj$aggregateRating$ratingCount,
-    author = paste(obj$author$name, collapse=';'),
-    tags = paste(obj$keywords, collapse=';')
+    author = paste(obj$author$name, collapse = ";"),
+    tags = paste(obj$keywords, collapse = ";")
   )
 }
 
 facts <- lines %>%
   map(get_facts) %>%
   bind_rows() %>%
-  distinct() %>% 
+  distinct() %>%
   mutate(
     id = str_match(id, "/([^/]+)$")[, 2],
     date = ymd(str_sub(date, start = 1, end = 10))
-  ) 
+  )
 
-facts %>% 
+facts %>%
   write_csv("outputs/facts.csv")
 ```
 
 ```{r}
-lines[[1]] %>% 
-  fromJSON() %>% 
+lines[[1]] %>%
+  fromJSON() %>%
   str()
 ```
 

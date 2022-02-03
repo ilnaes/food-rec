@@ -18,8 +18,6 @@ df <- read_csv("outputs/facts.csv") %>%
   clean_names()
 ingredients <- read_csv("outputs/ingredients.csv") %>%
   clean_names()
-counts <- ingredients %>%
-  count(id)
 ```
 
 We define a metric, which is the average number of missing ingredients we end up recommending.
@@ -68,7 +66,7 @@ test_fold <- function(fold, min_num = 2, pows = 0.5) {
   test <- fold %>%
     assessment() %>%
     left_join(counts, by = "id") %>%
-    filter(n >= 4) %>%
+    filter(n >= 4) %>% # test only on recipes with more than 4 ingredients
     select(-n) %>%
     left_join(ingredients, by = "id") %>%
     prep()
