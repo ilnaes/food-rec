@@ -11,7 +11,7 @@ Relevant files are:
 * prep.R - various other ad-hoc cleaning for ingredients
 * eda.Rmd ([html notebook](https://ilnaes.github.io/food-rec/eda.nb.html)) - EDA on the recipes and ingredients data
 * collab-filtr.Rmd ([html notebook](https://ilnaes.github.io/food-rec/collab-filtr.html)) - code for cross validating recommender over various parameters
-* food-rec/ingr.rec.R - R code for building recommender object and making predictions
-* food-rec/app.R - shiny app code
+* ingredients-rec/ingr.rec.R - R code for building recommender object and making predictions
+* ingredients-rec/app.R - shiny app
 
 A working shiny app is at https://ilnaes.shinyapps.io/ingredients-rec/.
